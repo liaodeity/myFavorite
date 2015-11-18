@@ -130,6 +130,7 @@ if($newArr['article_id']){
 		if($proIdArr){
 			# 返回形如array(0=>5255718,1=>5255719...)
 			$docArr1_1 = get_docid_by_proid($proIdArr,$needNum-$num0,$unArr);
+			//var_dump($docArr1_1);exit();
 			# 通过proId获得了文章id
 			if(is_array($docArr1_1)){
 				# 第一优先级和第二优先级的规则的数据合并
@@ -463,16 +464,19 @@ function get_product_id($docArr){
 # 跟据产品id，获取相关的文章id
 function get_docid_by_proid($proId,$num=36,$unArr=array()){
 	if(!$proId) return array();
+	global $db_doc;
 	if(is_array($proId)) $proIdStr = implode(',',$proId);
 	# 无论如何取36条，因为需要排重，以防不够
-	$dataArr = ZOL_Api::run("Article.Doc.getListByPro" , array(
-			'docType'        => '1,2,3,4,5,6',   #文章类型 1.新闻 2.行情 3.评测 4.非导购 5.导购 6.非行情&导购（评测 新闻） 7.非行情 （导购 评测 新闻)
-			'proId'          => $proIdStr,          #产品IDS    //$proId
-			'hourbtn'        => 720,             #多少小时以内的文章   一个月以内的
-			'num'            => 36,              #数量
-			'rtnCols'        => '*(document_id)',
-	));
-	//var_dump($dataArr);exit('522');
+// 	$dataArr = ZOL_Api::run("Article.Doc.getListByPro" , array(
+// 			'docType'        => '1,2,3,4,5,6',   #文章类型 1.新闻 2.行情 3.评测 4.非导购 5.导购 6.非行情&导购（评测 新闻） 7.非行情 （导购 评测 新闻)
+// 			'proId'          => $proIdStr,          #产品IDS    //$proId
+// 			'hourbtn'        => 720,             #多少小时以内的文章   一个月以内的
+// 			'num'            => 36,              #数量
+// 			'rtnCols'        => '*(document_id)',
+// 	));
+	# 获取产品id，取近3个月的数据
+	$sql = 'select document_id from document_index_hardware doc where `date` < "'.date('Y-m-d H:i:s').'" and doc_type_id in (1,2,3,4,5,6) and hardware_id in('.$proIdStr.') and doc.date > "'.date('Y-m-d H:i:s',time()-(2160*3600)).'" limit 36';
+	$dataArr = $db_doc->get_results($sql);
 	if($dataArr){
 		$newArr = array();
 		foreach($dataArr as $key=>$value){
@@ -486,6 +490,9 @@ function get_docid_by_proid($proId,$num=36,$unArr=array()){
 	}
 	#需要多少条则截取多少条数据
 	$dataArr = array_slice($newArr, 0,$num);
+	if(!$dataArr){
+		return array();
+	}
 	shuffle($dataArr);
 	
 	return $dataArr;
