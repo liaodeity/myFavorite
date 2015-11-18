@@ -325,8 +325,7 @@ function get_data_by_hot($num=36){
 function get_data_by_docid($idArr,$fields='document_id,title,class_id'){
 	global $db_doc;
 	# 从mongo缓存中获取数据
-	$mongoDB = new GuessMongo();
-	$dataArr1 = $mongoDB->mongo_select($idArr);
+	$dataArr1 = get_data_by_zol_api($idArr);
 	#count($idArr) = count($dataArr1);
 	$newIdArr = array();
 	foreach ($idArr as $k=>$v){
@@ -346,7 +345,8 @@ function get_data_by_docid($idArr,$fields='document_id,title,class_id'){
 	if($result){
 		foreach($result as $key=>$value){
 			$docIdKey = (int)$value['document_id'];
-			$newResult[$docIdKey]['document_id'] = $value['document_id'];
+			$newResult[$docIdKey]['document_id'] = (int)$value['document_id'];
+			$newResult[$docIdKey]['docId'] = $newResult[$docIdKey]['document_id'];
 			$newResult[$docIdKey]['title'] = $value['title'];
 			# 获取文章地址
 			$newResult[$docIdKey]['url'] = 'http://dynamic.zol.com.cn/channel/mainpage/get_doc_url.php?docId='.$value['document_id'];
@@ -356,15 +356,12 @@ function get_data_by_docid($idArr,$fields='document_id,title,class_id'){
 					'height'         => 104,             #高度
 					'default'        => 1,               #无图时返回占位图
 			));
-			$dataBox['docId'] = (int)$newResult[$docIdKey]['document_id'];
-			$dataBox['data'] = $newResult[$docIdKey];
-			$newResultTotal[] = $dataBox;
+			$newResultTotal[] = $newResult[$docIdKey];
 		}
-		# 如果有经过私有云查询的数据，则将其放入mongo缓存的集合中  mongo_insert($newResultTotal);
-		$mongoDB->mongo_insert($newResultTotal,7200);
+		# 如果有经过私有云查询的数据，则将其放入mongo缓存的集合中 
+		insert_data_by_zol_api($newResultTotal,3600);
 	}
 	$newResult += $dataArr1;
-	
 	
 	return $newResult;
 }
@@ -914,7 +911,7 @@ function recordArticle($array){
 	return true;
 }
 /**
- * 通过文章id，循环着从mongo中取缓存数据
+ * 通过文章id，循环着从mongo中取缓存数据 20151118
  */
 function get_data_by_zol_api($docIdArr){
 	if(!$docIdArr)return false;
@@ -933,6 +930,24 @@ function get_data_by_zol_api($docIdArr){
 		}
 	}
 	return $dataTotal;
+}
+/**
+ * 
+ */
+function insert_data_by_zol_api($dataArr,$time=7200){
+	if(!$dataArr)return false;
+	$cacheKey = 'Guess_you_like:document_id:';
+	foreach($dataArr as $k=>$v){
+		#写入缓存
+		ZOL_Api::run("Kv.MongoCenter.set" , array(
+			'module'         => 'cms',            		#业务名
+			'key'            => $cacheKey.$v['docId'],        		#key
+			'data'           => $v,  				#数据
+			'life'           => $time,            		#生命期   1*24*3600
+		));
+		//echo $cacheKey.$v['docId']."\r\n";
+	}
+	return true;
 }
 /**
  * 如果没有ip_ck或者redis中无记录，则调用补救规则，补救规则使用mongo缓存
