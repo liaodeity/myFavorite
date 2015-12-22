@@ -45,7 +45,13 @@ if(!isset($_GET['ip_ck']) || strlen($_GET['ip_ck'])<5) $ip_key = addslashes($_CO
 
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $needNum = isset($_GET['needNum']) ? (int)$_GET['needNum'] : 12;
+
 $callback = isset($_GET['callback']) ? addslashes(trim($_GET['callback'])) : '';
+# 是否是debug模式
+$debug = isset($_GET['debugTime']) ? true : false;
+if($debug){
+	$start_time = microtime(true);
+}
 
 //var_dump($_COOKIE['ip_ck']);  http://dynamic.zol.com.cn/channel/mainpage/guess_you_like.php
 $redis = new Redis();
@@ -65,10 +71,12 @@ if(!$redis->select(1)){
 
 # $ip_key = '58WB5PL2j7QuMDIwMzgxLjE0NDE1MDMyMDQ=';
 /* 压测时用到的代码  S */
-include('/www/dynamic/html/channel/mainpage/ip_cp_array.php');
-// $icNum = count($ipckArr);
-#$icIndex = mt_rand(0, 4999);
-#$ip_key = $specialIpCkArr1[$icIndex];
+if($debug && 1){
+	include('/www/dynamic/html/channel/mainpage/ip_cp_array.php');
+	// $icNum = count($ipckArr);
+	$icIndex = mt_rand(0, 1000);
+	$ip_key = $specialIpCkArr1[$icIndex];
+}
 /* 压测时用到的代码 E */
 
 
@@ -250,11 +258,15 @@ if($res2_1){
 		$i++;
 	}
 }
-
+#var_dump($fResult,$resDataAll['bbs']);exit('#255-2#');
+# 备份一下
+$fResultBak = $fResult;
 # 将将指定key的位置数据替换成论坛数据 (不包括key为0的图片位置)
 $keyPositionArr = array(1,2,3,5,6,7,9,10,11); 
 # 需要展示帖子的数量
-$bbsTopicNum = 1;
+$bbsTopicNum = 2;
+# 数据空出两个位置放置帖子
+$fResult = array_slice($fResult,0,$needNum-$bbsTopicNum);
 # 随机获取若干个文字链的位置
 $getPositionKey = array_rand($keyPositionArr,$bbsTopicNum);
 $getPositionArr = array();
@@ -262,8 +274,35 @@ if(!is_array($getPositionKey))$getPositionKey = array($getPositionKey,);
 foreach($getPositionKey as $k=>$v){
 	$getPositionArr[] = $keyPositionArr[$v];
 }
+# 处理一下bbs的数据，使其拥有article一样的数组结构
+$newBbsArr = array();
+foreach($resDataAll['bbs'] as $k=>$v){
+	$bbsValue = $v;
+	if(strpos($bbsValue['title'], '】') == false && $bbsValue['page_type_id']<4){
+		$v['title'] = '【贴】'.$bbsValue['title'];
+		$v['short_title'] = '【贴】'.$bbsValue['title'];
+	}else{
+		$v['title'] = $bbsValue['title'];
+		$v['short_title'] = $bbsValue['title'];
+	}
+	$v['url'] = $bbsValue['bbsUrl'];
+	$newBbsArr[$k] = $v;
+}
 #var_dump($getPositionArr);exit('#265_2#');
+# 将bbs数据插入随机的位置   $getPositionArr是存放随机位置数组
 $i = 0;
+foreach($getPositionArr as $k=>$v){
+	if(isset($newBbsArr[$i])){
+		array_splice($fResult,$v,0,array($newBbsArr[$i]));
+	}else{
+		$tmp = array_pop($fResultBak);
+		array_splice($fResult,$v,0,array($tmp));
+	}
+	$i++;
+}
+#var_dump($getPositionArr,$fResult);exit('#289-3#');
+
+/*
 foreach($getPositionArr as $key=>$value){
 	if(!$value || $i > $bbsTopicNum) break;
 	if(isset($resDataAll['bbs'][$i]) && !empty($resDataAll['bbs'][$i])){
@@ -280,7 +319,7 @@ foreach($getPositionArr as $key=>$value){
 		continue;
 	}
 	$i++;
-}
+}*/
 
 # 记录文章的展现次数 ,只记录1tab（1屏）的
 $docArr = array();$i = 1;
@@ -309,6 +348,13 @@ if($finalNum < $needNum){
 $fResult = api_json_encode($fResult);
 $j = json_encode($fResult);
 echo $callback ? $callback.'('.$j.')' : $j;
+if($debug){
+	$end_time = microtime(true);
+	$exec_time = $end_time - $start_time;
+	$needTime = round($exec_time,6);
+	echo '<h2 style="color:red;font-weight:bold;">页面执行了'.$needTime.'秒</h2>';
+	storage_tmp_data($needTime);
+}
 return '';
 exit('');
 
@@ -670,16 +716,21 @@ function get_arti_by_word($docIdArr,$num=12){
 	}else{
 		$docIdStr = 'article_id='.$docIdStr;
 	}
-	
+	$fields = 't.article_id,t.uv,t.word,t.title,t.page_type_id,t.article_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag';
+	$wheres1 = ' AND t2.word is not null AND t.bbsUrl="" AND t.article_type_id not in(6,7) AND class_id<>96 AND class_id<>370 ';
+	$wheres2 = ' AND t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4 ';
 	# 将小结果集放前边（小结果集驱动大结果集）
-	$sql = '(SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
-on t.word=t2.word where t2.word is not null AND t.bbsUrl="" GROUP BY t.article_id ORDER BY uv desc limit 20)UNION (SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
-on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4 GROUP BY t.bbsUrl ORDER BY uv desc limit 4)';
+	$sql = '(SELECT '.$fields.' from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
+on t.word=t2.word where 1 '.$wheres1.' GROUP BY t.article_id ORDER BY uv desc limit 20)
+			UNION 
+			(SELECT '.$fields.' from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
+on t.word=t2.word where 1 '.$wheres2.' GROUP BY t.bbsUrl ORDER BY uv desc limit 4)';
 	# $sql = 'SELECT t.article_id,t.id,t.uv,t.word,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id='.$docId.') as t2 LEFT JOIN  tongji_article_title_words t on t.word=t2.word where t2.word is not null GROUP BY t.article_id ORDER BY uv desc limit '.$randNum;
 // 	$sql = '(SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id=5455040) as t2 LEFT JOIN  tongji_article_title_words t
 //  on t.word=t2.word where t2.word is not null AND t.bbsUrl="" GROUP BY t.article_id ORDER BY uv desc limit 50)UNION (SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id=5455040) as t2 LEFT JOIN  tongji_article_title_words t
 //  on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4 GROUP BY t.bbsUrl ORDER BY uv desc limit 4)';
 	//exit('793_2');
+
 	$resArr1 = $db_guess->get_results($sql);
 	# 文章属性，优先展示第一类属性
 	$propertyArr1 = array('nproduct','nmanu','nsubcat','eng','nproperty','ntype','nbooktitle');
@@ -722,6 +773,7 @@ on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4
 		$resArr3_1 = array();
 		$resArr3_2 = array();
 		$newArr2 = array();
+		# 按属性优先进行排列
 		foreach($propertyArr1 as $v){
 			if(!isset($resArr2_1[$v])) continue;
 			$newArr2 = array_merge($newArr2,$resArr2_1[$v]);
@@ -741,7 +793,7 @@ on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4
 		# 合并
 		$resArr3 = $resArr3_1 + $resArr3_2;
 		var_export($resArr3);//exit('804_2');*/
-		//var_dump($resArr3);exit('#788_1#');
+		#var_dump($resArr3);exit('#745_1#');
 		# 如果多于36条，则将其分成3组，每组在内部随机顺序
 		if($num >= $needNum){
 			$newArr3 = array();
@@ -750,7 +802,7 @@ on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4
 			$resArr3 = array_chunk($resArr3,12);
 			foreach($resArr3 as $key=>$valueArr){
 				if($key > 2) break;
-				shuffle($valueArr);
+				#shuffle($valueArr);
 				$resArr3_1 = $valueArr;
 				//var_dump($resArr3_1);exit('816_1');
 				$newArr3 += $resArr3_1;
@@ -761,15 +813,17 @@ on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4
 			foreach ($newArr3 as $k=>$v){
 				$newArr2[$v['article_id']] = $v;
 			}
-			//var_dump($newArr3);exit('814_1');
+			#var_dump($newArr2);exit('802_1');
 			return array('article'=>$newArr2,'bbs'=>$bbsData);
 			//return get_from_rand($resArr3);
 		}else{
-			# 如果不足36条，也将其打乱顺序返回
-			$resArr3 = array_flip($resArr3);
-			shuffle($resArr3);
+			$newArr2 = array();
+			# 将文章的返回数据 转成以文章id为键的数组
+			foreach ($resArr3 as $k=>$v){
+				$newArr2[$v['article_id']] = $v;
+			}
 			//exit('821_1');
-			return array('article'=>array_flip($resArr3),'bbs'=>$bbsData);
+			return array('article'=>$newArr2,'bbs'=>$bbsData);
 		}
 	}else{
 		//mail('su.hanyu@zol.com.cn','【ZOL首页自"猜你喜欢"查出的数据不是数组】',"get_arti_by_word\r\n".'查出的数据不是数组'.$sql);
@@ -990,6 +1044,32 @@ function get_uv_data_from_mongo(){
 	shuffle($data);
 	
 	return $data;
+}
+/**
+ * 往mongo中存一组数，用于计算平均值
+ * 传入一个int或者float类型
+ */
+function storage_tmp_data($data){
+	#缓存key
+	$cacheKey = 'Guess_you_like:tmp_data_average:guess3';
+	$mDataArr = ZOL_Api::run("Kv.MongoCenter.get" , array(
+			'module'         => 'cms',        #业务名
+			'tbl'            => 'zol_index',     #表名
+			'key'            => $cacheKey,    #key
+	));
+	if(!$mDataArr || !is_array($mDataArr)){
+		$mDataArr = array();
+	}
+	$mDataArr[] = $data;
+	#写入缓存
+	ZOL_Api::run("Kv.MongoCenter.set" , array(
+	'module'         => 'cms',            		#业务名
+	'tbl'            => 'zol_index',     		#表名
+	'key'            => $cacheKey,        		#key
+	'data'           => $mDataArr,  			#数据
+	'life'           => 3600,            		#生命期   1*1*3600
+	));
+	return true;
 }
 
 
