@@ -77,6 +77,19 @@ if($dataArr && !$refresh && $historyNum==$dataNum ){
 ##############################
 # 从100中随机取36条。   #####  36是 $dataNum 的一个实例，下面的程序都是  ########  表示猜你喜欢返回的数据数量
 $randNum = 100;
+# 属性所对应的权重
+$propertyArr = array(
+	'nproduct'=>1.00,
+	'nbooktitle'=>0.95,
+	'nmanu'=>0.85,
+	'ntype'=>0.78,
+	'nproperty'=>0.70,
+	'nsubcat'=>0.60,
+	'eng'=>0.60,
+	'n'=>0.30,
+	'nr'=>0.30,
+	'nz'=>0.30,
+);
 # 用于排重
 $unArr = array(999999,);
 # 获取当前的doc_id
@@ -84,8 +97,9 @@ $docArr = array();
 if($doc_id){
 	$docArr[] = $doc_id;
 	# 根据当前的文章id，取最高优先级的规则的数据.
-	$res1_0 = get_arti_by_word($docArr[0],$dataNum);
-	//var_dump($res1_0);exit('96_1');
+	$resDataAll = get_arti_by_word($docArr,$dataNum);
+	$res1_0 = isset($resDataAll['article']) ? $resDataAll['article'] : array();
+	#var_dump($res1_0);exit('102_1');
 	$num0 = count($res1_0);
 	# 记录进入日志
 	if($num0 <= 0) {
@@ -781,79 +795,136 @@ function get_data_by_hot_v3($num=100,$getNum=36,$unDocArr=array(),$is_miss=true)
 
 /**
  * 通过关键字获取相关文章id
+ * 文章页的要排除：370（Z超值）
  * @params int $docId 	根据用户浏览的文章ID
  * @params int $num		需要返回的文章id的数量，最多是36（此参数暂时不用）
  */
-function get_arti_by_word($docId,$num2=36){
-	global $randNum,$classId,$db_doc_read;
-	if(!$docId>0) return false;
+function get_arti_by_word($docIdArr,$num2=36){
+	global $randNum,$classId,$db_doc_read,$propertyArr;
+	if(!$docIdArr) return array();
+	$wordArr = get_word_results($docIdArr);
+	$wordStr = '"'.implode('","',$wordArr).'"';
+	$sqlWordStr = $wordArr ? ' AND t.word in('.$wordStr.') ' : ' ';
+	# 查询的字段
+	$fields1 = ' t.article_id,t.title,t.uv,count(t.article_id) as cnt,t.bbsUrl,t.flag ';
 	# 将小结果集放前边（小结果集驱动大结果集）
-	$fields = 't.article_id,t.article_type_id,t.uv,t.word,t.class_id';
-	# 对96频道的全国行情特殊判断
-	$whereEle1 = $classId==96 ? ' ' : ' AND class_id<>96 ';
-	$wheres1 = ' t2.word is not null AND t.bbsUrl="" AND t.article_type_id not in(6,7) AND class_id<>370 AND class_id='.$classId.$whereEle1;
-	# 同频道的没有，则推其他频道的
-	$wheres2 = ' t2.word is not null AND t.bbsUrl="" AND t.article_type_id not in(6,7) AND class_id<>370 AND class_id<>'.$classId.$whereEle1;
-	//$sql = 'SELECT t.article_id,t.uv,t.word,t2.word as w,count(*) as cnt from (SELECT word from tongji_article_title_words where article_id='.$docId.') as t2 LEFT JOIN  tongji_article_title_words t
-	//on t.word=t2.word where t2.word is not null GROUP BY t.article_id ORDER BY uv desc limit '.$randNum;
-	$sql = '(SELECT '.$fields.',t2.word as w,count(*) as cnt,t.bbsUrl from (SELECT word from tongji_article_title_words where article_id='.$docId.') as t2 LEFT JOIN  tongji_article_title_words t
-	on t.word=t2.word where '.$wheres1.' GROUP BY t.article_id ORDER BY uv desc limit '.$randNum.') UNION 
-			(SELECT '.$fields.',t2.word as w,count(*) as cnt,t.bbsUrl from (SELECT word from tongji_article_title_words where article_id='.$docId.') as t2 LEFT JOIN  tongji_article_title_words t
-	on t.word=t2.word where '.$wheres2.' GROUP BY t.article_id ORDER BY uv desc limit '.$randNum.')';
+	$wheres1 = $sqlWordStr.' AND t.bbsUrl="" ';
+	$wheres2 = $sqlWordStr.' AND t.bbsUrl<>"" AND page_type_id<>4 ';
+	$order1 = $order2 = ' ORDER BY uv desc ';
+	$sql = '(SELECT '.$fields1.' from tongji_article_title_words t where 1 '.$wheres1.' GROUP BY t.article_id,t.flag '.$order1.' limit 120)
+			';
 	#echo $sql;exit();
 	$resArr1 = $db_doc_read->get_results($sql);
-	if(is_array($resArr1)){
-		$num = count($resArr1);
-		$resArr2 = $resArr2_1= array();
-		$resArr2_1['currnetClass'] = $resArr2_1['otherClass'] = array();
-		foreach($resArr1 as $key=>$value){
-			# 将docId和uv等值转为整形
-			$value['article_id'] = (int)$value['article_id'];
-			$value['class_id'] = (int)$value['class_id'];
-			$value['uv'] = (int)$value['uv'];
-			$value['cnt'] = (int)$value['cnt'];
-			# 获取uv*cnt的值
-			$value['uvCount'] = $value['uv']*$value['cnt'];
-			$resArr2[$value['article_id']] = $value;
-			if($value['class_id'] == $classId){
-				$resArr2_1['currnetClass'][] = $resArr2[$value['article_id']];
+	# 统计词频 + 分词权重
+	$tmpArr1 = $tmpArr2 = $bbsData = $articleData = array();
+	$resArr2 = $resArr1;
+	$bbsDataEnough  = false;
+	# 方案1_1
+	if($resArr1){
+		foreach($resArr1 as $k=>$v){
+			# 只需要取1条论坛数据
+			if($v['bbsUrl'] && !$bbsDataEnough){
+				$bbsData[] = $v;
+				if(count($bbsData) > 1)$bbsDataEnough = true;
+			}
+			if($v['article_id'] == 1)continue;
+			if(!array_key_exists($v['article_id'], $tmpArr1)){
+				$tmpArr1[$v['article_id']]['word_power_val'] = $propertyArr[$v['flag']] * $v['cnt'];
 			}else{
-				$resArr2_1['otherClass'][] = $resArr2[$value['article_id']];
+				$tmpArr1[$v['article_id']]['num']++;
+				$tmpArr1[$v['article_id']]['word_power_val'] += $propertyArr[$v['flag']] * $v['cnt'];
+			}
+			$tmpArr1[$v['article_id']]['uv'] = $v['uv'];
+			$tmpArr1[$v['article_id']]['article_id'] = $v['article_id'];
+		}
+		# 排除用于查找相关文章的文章id
+		foreach($docIdArr as $k=>$v){
+			if(isset($tmpArr1[$v]))unset($tmpArr1[$v]);
+		}
+		# 对数据按照“分词权重”进行倒序
+		$tmpArr1 = multi_array_sort($tmpArr1,'word_power_val',SORT_DESC);
+		$i = 1;
+		# 每种相似度一个数组，存储“相似度相同”的数据
+		foreach($tmpArr1 as $k=>$v){
+			if(array_key_exists($v['word_power_val'], $tmpArr2) && $i<12){
+				$tmpArr2[$v['word_power_val']][] = $v;
+			}else{
+				$tmpArr2[$v['word_power_val']][] = $v;
+				$i++;
 			}
 		}
-		#同频道的和非同频道的分开,再合并成同频道的数据放前面，因为同频道的数据优先级更高
-		$resArr2 = array_merge($resArr2_1['currnetClass'],$resArr2_1['otherClass']);
-		# 将数据重组成以article_id为键的数组
-		$resArr2_1 = array();
-		foreach($resArr2 as $k=>$v){
-			$resArr2_1[$v['article_id']] = $v;
+		$tmpArr1 = array();
+		# 相同相似度的数据按照uv倒序
+		foreach($tmpArr2 as $k=>$v){
+			$tmpArr2[$k] = multi_array_sort($v,'uv',SORT_DESC);
+			$tmpArr1 = array_merge($tmpArr1,$tmpArr2[$k]);
 		}
-		$resArr2 = $resArr2_1;
-		# 排除用于查找相关文章的文章id（也就是排除自己）
-		if(isset($resArr2[$docId])) unset($resArr2[$docId]);
-		uasort($resArr2, 'cmp_uv_cnt');
-		# 排序后生成一个只有docId的数组
-		$resArr3 = array();
-		foreach($resArr2 as $key=>$value){
-			# 合成docId为键，uv*cnt为值的数组
-			$resArr3[$key] = $value['uvCount'];
+		$tmpArr1 = array_slice($tmpArr1,0,12,true);
+		$tmpArr2 = array();
+		foreach($tmpArr1 as $k=>$v){
+			$tmpArr2[$v['article_id']] = $v;
 		}
-		# 如果多余，则在取出的这么多数据中进行随机取指定的条数
-		if($num>$num2){
-			//var_dump($num2);exit('751_1');
-			return get_from_rand($resArr3,$num2);
+		$articleData = $tmpArr2;
+	}
+	#var_dump($articleData);exit('#868-1#');
+	if($resArr1 && is_array($resArr1)){
+		# 数量是否足够
+		$num = count($articleData);
+		$newArr2 = $articleData;
+		if($num >= $needNum){
+			return array('article'=>$newArr2,'bbs'=>$bbsData);
+			//return get_from_rand($resArr3);
 		}else{
-			$finalNum = count($resArr3);
-			if($finalNum > $num2){
-				return get_from_rand($resArr3,$num2);
-			}else{
-				return $resArr3;
-			}
+			//exit('821_1');
+			return array('article'=>$newArr2,'bbs'=>$bbsData);
 		}
 	}else{
 //		mail('su.hanyu@zol.com.cn','【ZOL首页自"猜你喜欢"查出的数据不是数组】',"get_arti_by_word\r\n".'查出的数据不是数组'.$sql);
 		return array();
 	}
+}
+/**
+ * 对多维数组中的某个字段进行排序
+ * @param unknown $multi_array
+ * @param unknown $sort_key
+ * @param string $sort
+ * @return boolean|unknown
+ */
+function multi_array_sort($multi_array,$sort_key,$sort=SORT_ASC){
+	if(is_array($multi_array)){
+		foreach ($multi_array as $row_array){
+			if(is_array($row_array)){
+				$key_array[] = $row_array[$sort_key];
+			}else{
+				return false;
+			}
+		}
+	}else{
+		return false;
+	}
+	array_multisort($key_array,$sort,$multi_array);
+	return $multi_array;
+}
+/**
+ * 根据文章id得出分词结果
+ * @param array(0=>5234245,1=>5434654,...)
+ * @return array(0=>'oled',1=>'苹果',..)
+ */
+function get_word_results($articleArr){
+	if(!$articleArr)return false;
+	global $db_doc_read;
+	$idStr = implode(',',$articleArr);
+	$sql = 'select word from tongji_article_title_words where article_id in('.$idStr.') limit 15';
+	$res1 = $db_doc_read->get_results($sql);
+	$tmpArr = array();
+	if($res1){
+		foreach($res1 as $k=>$v){
+			$tmpArr[] = $v['word'];
+		}
+	}
+	$res1 = $tmpArr;
+
+	return $res1;
 }
 
 /**
