@@ -26,8 +26,9 @@ include('/www/dynamic/html/admin/include/connection.php');
 define('ZOL_API_ISFW', false);         #是否使用ZOL新框架，true为使用
 require('/www/zdata/Api.php');    #引入入口文件
 //require '/www/dynamic/html/include/mongoOperate.php';# mongo的操作函数
-
-ZOL_Api::run("Base.Page.setExpires" , array('second'=>0));
+if(!isset($_REQUEST['debug'])){
+	ZOL_Api::run("Base.Page.setExpires" , array('second'=>30));
+}
 
 # 调试模式
 if(0){
@@ -56,8 +57,9 @@ if($debug){
 //var_dump($_COOKIE['ip_ck']);  http://dynamic.zol.com.cn/channel/mainpage/guess_you_like.php
 $redis = new Redis();
 // $redis->connect('10.15.187.70', 6380);
-// $redis->connect('0.19.34.18', 6380);  //redis_cache_server_1_6380.zoldbs.com.cn  // 10.15.185.118
-$redis->connect('redis_cache_server_1_6380.zoldbs.com.cn', 6380);
+// $redis->connect('0.19.34.18', 6380);  //redis_cache_server_1_6380.zoldbs.com.cn  
+// 10.15.185.118  redis_cache_server_1_6380_read.zoldbs.com.cn
+$redis->connect('redis_cache_server_1_6380_read.zoldbs.com.cn', 6380);
 $redis->setOption(Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP);    // use built-in serialize/unserialize
 
 # 从300中随机取36条。
@@ -71,7 +73,7 @@ if(!$redis->select(1)){
 
 # $ip_key = '58WB5PL2j7QuMDIwMzgxLjE0NDE1MDMyMDQ=';
 /* 压测时用到的代码  S */
-if($debug && 1){
+if($debug && 0){
 	include('/www/dynamic/html/channel/mainpage/ip_cp_array.php');
 	// $icNum = count($ipckArr);
 	$icIndex = mt_rand(0, 1000);
@@ -79,6 +81,20 @@ if($debug && 1){
 }
 /* 压测时用到的代码 E */
 
+## 全局变量声明
+# 属性所对应的权重
+$propertyArr = array(
+	'nproduct'		=>1.00,
+	'nbooktitle'	=>0.95,
+	'nmanu'			=>0.85,
+	'ntype'			=>0.78,
+	'nproperty'		=>0.70,
+	'nsubcat'		=>0.60,
+	'eng'			=>0.60,
+	'n'				=>0.30,
+	'nr'			=>0.30,
+	'nz'			=>0.30,
+);
 
 if($ip_key){
 	$result = $redis->hGetAll($ip_key);
@@ -262,9 +278,9 @@ if($res2_1){
 # 备份一下
 $fResultBak = $fResult;
 # 将将指定key的位置数据替换成论坛数据 (不包括key为0的图片位置)
-$keyPositionArr = array(1,2,3,5,6,7,9,10,11); 
+$keyPositionArr = array(9,10,11); #1,2,3,5,6,7,9,10,11
 # 需要展示帖子的数量
-$bbsTopicNum = 2;
+$bbsTopicNum = 2;# 2表示只展示1条论坛帖子
 # 数据空出两个位置放置帖子
 $fResult = array_slice($fResult,0,$needNum-$bbsTopicNum);
 # 随机获取若干个文字链的位置
@@ -342,7 +358,7 @@ $fResult[0]['dataDebug'] = $docArr[0];
 $msg = '数据不足'.$needNum.'条';
 if($finalNum < $needNum){ 
 	//mail('su.hanyu@zol.com.cn','【ZOL首页"猜你喜欢"数据故障】',date('Y-m-d H:i:s ==> ').$msg."\r\n".__FILE__.__LINE__); 
-	toLog(array($ip_key=>count($fResult),));
+	#toLog(array($ip_key=>count($fResult),));
 }
 
 $fResult = api_json_encode($fResult);
@@ -360,21 +376,6 @@ exit('');
 
 
 /*********************************以下是一些需要用到的函数**********************************************************/
-# 只从C计划获取数据
-function get_data_by_hot($num=36){
-	global $db_doc;
-	$fields='document_id,title,url,pic_src';
-	$sql = 'select '.$fields.' from article_monitor_all where publish_time>"'.date('Y-m-d',strtotime('-3 days')).'" AND is_del=0 group by document_id order by score_time_position desc limit '.$num;
-	$result2 = $db_doc -> get_results($sql,'A');
-	if($result2){
-		foreach($result2 as $key=>$value){
-			$result2[$key]['url'] = $value['url'].'?vlike=miss';
-		}
-	}
-	
-	return $result2;
-}
-
 # 根据一串doc_id获取需要的数据
 function get_data_by_docid($idArr,$fields='document_id,title,class_id'){
 	global $db_doc;
@@ -426,7 +427,7 @@ function get_data_by_docid($idArr,$fields='document_id,title,class_id'){
  * @params int	$getNum 从给定的数组中，随机取多少条，默认取36条。
  * @return 返回形如： array(36) {[5255718]=>int(819)[5264685]=>int(593)...
  */
-function get_from_rand($array,$getNum=36){
+function get_from_rand($array,$getNum=12){
 	global $randNum;
 	$arrNum = count($array);
 	if($arrNum < $randNum){
@@ -458,43 +459,6 @@ function get_from_rand($array,$getNum=36){
 	return $newArray2;
 }
 
-# 使用一期规则，获取100篇分值倒序文章，再从中随机取36条，按分值倒序返回。 by suhy 20150616
-function get_data_by_hot_v2($num=100,$getNum=36){
-	global $db_doc;
-	$fields='document_id,title,url,pic_src,score_time_position';
-	$sql = 'select '.$fields.' from article_monitor_all where publish_time>"'.date('Y-m-d',strtotime('-3 days')).'" AND is_del=0 group by document_id order by score_time_position desc limit '.$num;
-	$result2 = $db_doc -> get_results($sql,'A');
-	
-	if($result2){
-		$res1 = array_rand($result2,$getNum);
-		if($res1){
-			$newArray1 = array();
-			foreach($res1 as $key=>$value){
-				$newArray1[] = $result2[$value];
-			}
-			$newArray2 = array();
-			$newArray3 = array();
-			foreach($newArray1 as $key=>$value){
-				$newArray2[$value['document_id']] = $value['score_time_position'];
-				$newArray3[$value['document_id']] = $value;
-			}
-			arsort($newArray2);
-			$newArray4 = array();
-			foreach($newArray2 as $key=>$value){
-				$newArray4[$key] = $newArray3[$key];
-			}
-		}
-		
-	}
-	
-	if($newArray4){
-		foreach($newArray4 as $key=>$value){
-			$newArray4[$key]['url'] = $value['url'].'?vlike=miss';
-		}
-	}
-	
-	return $newArray4;
-}
 # 通过一组文章id获取产品id 返回的是数组
 function get_product_id($docArr){
 	if(!is_array($docArr))return false;
@@ -528,7 +492,7 @@ function get_docid_by_proid($proId,$num=36,$unArr=array()){
 // 			'rtnCols'        => '*(document_id)',
 // 	));
 	# 获取产品id，取近3个月的数据
-	$sql = 'select document_id from document_index_hardware doc where `date` < "'.date('Y-m-d H:i:s').'" and doc_type_id in (1,2,3,4,5,6) and hardware_id in('.$proIdStr.') and doc.date > "'.date('Y-m-d H:i:s',time()-(2160*3600)).'" limit 36';
+	$sql = 'select document_id from document_index_hardware doc where `date` < "'.date('Y-m-d H:i:s').'" and doc_type_id in (1,2,3,4,5,6) and class_id<>96 and hardware_id in('.$proIdStr.') and doc.date > "'.date('Y-m-d H:i:s',time()-(2160*3600)).'" limit 36';
 	$dataArr = $db_doc->get_results($sql);
 	if($dataArr){
 		$newArr = array();
@@ -706,122 +670,129 @@ function get_data_by_hot_v3($num=100,$getNum=36,$unDocArr=array(),$is_miss=true)
  */
 function get_arti_by_word($docIdArr,$num=12){
 	if(!$docIdArr) return false;
-	global $db_guess,$randNum,$needNum;
-	//$sql = 'SELECT t.article_id,t.uv,t.word,t2.word as w,count(t.article_id) as cnt from tongji_article_title_words t LEFT JOIN (SELECT word from tongji_article_title_words where article_id='.$docId.') 
-	//as t2 on t.word=t2.word where t2.word is not null GROUP BY t.article_id ORDER BY uv desc limit '.$randNum;
-	$docIdStr = $docIdArr;
+	global $db_guess,$randNum,$needNum,$propertyArr;
+	/* $classArr = get_class_id_by_docid(array(
+		'articleIdArr'=>$docIdArr,
+	));
+	$classStr = implode(',',array_unique($classArr));
+	$classNum = count($classArr);
+	if($classNum>1){
+		$sqlClassStr = ' class_id in('.$classStr.') ';
+	}else if($classNum==1){
+		$sqlClassStr = ' class_id = '.$classStr.' ';
+	}else{
+		$sqlClassStr = '';
+	} */
+	$wordArr = get_word_results($docIdArr);
+	$wordStr = '"'.implode('","',$wordArr).'"';
+	$sqlWordStr = $wordArr ? ' AND t.word in('.$wordStr.') ' : '';
+	#var_dump($classArr,$classStr);exit('#667-1#');
 	if(is_array($docIdArr)) {
 		$docIdStr = implode(',',$docIdArr);
-		$docIdStr = 'article_id in ('.$docIdStr.')';
+		$docIdStr = ' article_id in ('.$docIdStr.') ';
 	}else{
-		$docIdStr = 'article_id='.$docIdStr;
+		$docIdStr = ' article_id='.$docIdStr.' ';
 	}
-	$fields = 't.article_id,t.uv,t.word,t.title,t.page_type_id,t.article_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag';
-	$wheres1 = ' AND t2.word is not null AND t.bbsUrl="" AND t.article_type_id not in(6,7) AND class_id<>96 AND class_id<>370 ';
-	$wheres2 = ' AND t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4 ';
+	# 查询的字段
+	$fields1 = ' t.article_id,t.title,t.uv,count(article_id) as cnt,t.bbsUrl,t.flag ';
+	$fields2 = ' t.article_id,t.title,t.uv,count(t.bbsUrl) as cnt,t.bbsUrl,t.flag ';
+	$wheres1 = $sqlWordStr.' AND t.bbsUrl="" ';
+	$wheres2 = $sqlWordStr.' AND t.bbsUrl<>"" AND page_type_id<>4 ';
+	$order1 = $order2 = ' ORDER BY uv desc ';
 	# 将小结果集放前边（小结果集驱动大结果集）
-	$sql = '(SELECT '.$fields.' from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
-on t.word=t2.word where 1 '.$wheres1.' GROUP BY t.article_id ORDER BY uv desc limit 20)
+	# $wordStr = '"京东","苹果","手机","笔记本"';
+	$sql = '(SELECT '.$fields1.' from tongji_article_title_words t where 1 '.$wheres1.' GROUP BY t.article_id,t.flag '.$order1.' limit 120)
 			UNION 
-			(SELECT '.$fields.' from (SELECT word from tongji_article_title_words where '.$docIdStr.') as t2 LEFT JOIN  tongji_article_title_words t
-on t.word=t2.word where 1 '.$wheres2.' GROUP BY t.bbsUrl ORDER BY uv desc limit 4)';
-	# $sql = 'SELECT t.article_id,t.id,t.uv,t.word,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id='.$docId.') as t2 LEFT JOIN  tongji_article_title_words t on t.word=t2.word where t2.word is not null GROUP BY t.article_id ORDER BY uv desc limit '.$randNum;
-// 	$sql = '(SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id=5455040) as t2 LEFT JOIN  tongji_article_title_words t
-//  on t.word=t2.word where t2.word is not null AND t.bbsUrl="" GROUP BY t.article_id ORDER BY uv desc limit 50)UNION (SELECT t.article_id,t.uv,t.word,t.title,t.page_type_id,t2.word as w,count(*) as cnt,t.bbsUrl,t.flag from (SELECT word from tongji_article_title_words where article_id=5455040) as t2 LEFT JOIN  tongji_article_title_words t
-//  on t.word=t2.word where t2.word is not null AND t.bbsUrl<>"" AND page_type_id<>4 GROUP BY t.bbsUrl ORDER BY uv desc limit 4)';
-	//exit('793_2');
-
-	$resArr1 = $db_guess->get_results($sql);
-	# 文章属性，优先展示第一类属性
-	$propertyArr1 = array('nproduct','nmanu','nsubcat','eng','nproperty','ntype','nbooktitle');
-	$propertyArr2 = array('n','nr','nz');
-	if(is_array($resArr1)){
-		$bbsData = array();
-		$articleData = array();
-		# 先将论坛数据和文章数据进行剥离
-		$i = 0;
-		foreach($resArr1 as $key=>$value){
-			# 只需要取4条论坛数据
-			if($value['bbsUrl']){
-				if($i > 4) continue;
-				$bbsData[] = $value;
-				$i++;
-			}else{
-				$articleData[] = $value;
-			}
+			(SELECT '.$fields1.' from tongji_article_title_words t where 1 '.$wheres2.' '.$order2.' limit 2)';
+		
+	/**
+	 * @desc START 杨叔说搞一个缓存 add by 任新强 2015-12-30 11:20:21
+	 */
+	if(!$sqlWordStr){
+		return array();
+		$mongokey = 'zol:cms:guess:you:like:union:sql:mongo:nb:key';
+		$mongoDate = ZOL_Api::run("Kv.MongoCenter.get" , array(
+		    'module'         => 'cms',           #业务名
+		    'key'            => $mongokey,   #key
+		));
+		if(!$mongoDate){
+		    $resArr1 = $db_guess->get_results($sql);
+		    ZOL_Api::run("Kv.MongoCenter.set" , array(
+		        'module'         => 'cms',           #业务名
+		        'key'            => $mongokey,   	 #key
+		        'data'           => $resArr1,       #数据
+		        'life'           => 1800,        #生命期
+		    ));
+		} else {
+		    $resArr1 = $mongoDate;
 		}
-		$resArr1 = $articleData;
-		$num = count($resArr1);
-		$resArr2 = $resArr2_1 = array();
-		$value0 = array();
-		foreach($resArr1 as $key=>$value){
-			# 将docId和uv等值转为整形
-			$value0['article_id'] = (int)$value['article_id'];
-			$value0['uv'] = (int)$value['uv'];
-			$value0['cnt'] = (int)$value['cnt'];
-			# 获取uv*cnt的值
-			$value0['uvCount'] = $value['uv']*$value['cnt'];
-			
-			$resArr2[$value0['article_id']] = $value0;
-			$resArr2_1[$value['flag']][] = $value0;
+	} else {
+		$resArr1 = $db_guess->get_results($sql);
+	}
+	/**
+	 * @desc END
+	 */
+	
+	# 统计词频 + 分词权重
+	$tmpArr1 = $tmpArr2 = $bbsData = $articleData = array();
+	$resArr2 = $resArr1;
+	$bbsDataEnough  = false;
+	# 方案1_1
+	if($resArr1){
+		foreach($resArr1 as $k=>$v){
+			# 只需要取1条论坛数据
+			if($v['bbsUrl'] && !$bbsDataEnough){
+				$bbsData[] = $v;
+				if(count($bbsData) > 1)$bbsDataEnough = true;
+			}
+			if($v['article_id'] == 1)continue;
+			if(!array_key_exists($v['article_id'], $tmpArr1)){
+				$tmpArr1[$v['article_id']]['word_power_val'] = $propertyArr[$v['flag']] * $v['cnt'];
+			}else{
+				$tmpArr1[$v['article_id']]['num']++;
+				$tmpArr1[$v['article_id']]['word_power_val'] += $propertyArr[$v['flag']] * $v['cnt'];
+			}
+			$tmpArr1[$v['article_id']]['uv'] = $v['uv'];
+			$tmpArr1[$v['article_id']]['article_id'] = $v['article_id'];
 		}
 		# 排除用于查找相关文章的文章id
-		if(isset($docId) && isset($resArr2[$docId])) unset($resArr2[$docId]);
-		// uasort($resArr2, 'cmp_uv_cnt');
-		# 排序后生成一个只有docId的数组
-		$resArr3 = array();
-		$resArr3_1 = array();
-		$resArr3_2 = array();
-		$newArr2 = array();
-		# 按属性优先进行排列
-		foreach($propertyArr1 as $v){
-			if(!isset($resArr2_1[$v])) continue;
-			$newArr2 = array_merge($newArr2,$resArr2_1[$v]);
+		foreach($docIdArr as $k=>$v){
+			if(isset($tmpArr1[$v]))unset($tmpArr1[$v]);
 		}
-		$resArr3 = $newArr2;
-		//var_dump($resArr2);
-		/*
-		foreach($resArr2 as $key=>$value){
-			# 合成docId为键，uv*cnt为值的数组
-			// $resArr3[$key] = $value['uvCount'];
-			if(in_array($value['flag'],$propertyArr1)){
-				$resArr3_1[$key] = $value['uvCount'];
-			}else{
-				$resArr3_2[$key] = $value['uvCount'];
-			}
+		# 对数据按照“分词权重”进行倒序
+		$tmpArr1 = multi_array_sort($tmpArr1,'word_power_val',SORT_DESC);
+		$i = 1;
+		# 每种相似度一个数组，存储“相似度相同”的数据
+		foreach($tmpArr1 as $k=>$v){
+			$newKey = $v['word_power_val']*10000;
+			$tmpArr2[$newKey][] = $v;
 		}
-		# 合并
-		$resArr3 = $resArr3_1 + $resArr3_2;
-		var_export($resArr3);//exit('804_2');*/
-		#var_dump($resArr3);exit('#745_1#');
-		# 如果多于36条，则将其分成3组，每组在内部随机顺序
+		$tmpArr1 = array();
+		# 相同相似度的数据按照uv倒序
+		foreach($tmpArr2 as $k=>$v){
+			$tmpArr2[$k] = multi_array_sort($v,'uv',SORT_DESC);
+			$tmpArr1 = array_merge($tmpArr1,$tmpArr2[$k]);
+		}
+		$tmpArr1 = array_slice($tmpArr1,0,12,true);
+		$tmpArr2 = array();
+		foreach($tmpArr1 as $k=>$v){
+			$tmpArr2[$v['article_id']] = $v;
+		}
+		$articleData = $tmpArr2;
+	}
+	#var_dump($articleData,$bbsData);
+	#echo $sql; exit('759-5');
+	# 文章属性，优先展示第一类属性
+	#$propertyArr1 = array('nproduct','nmanu','nsubcat','eng','nproperty','ntype','nbooktitle');
+	#$propertyArr2 = array('n','nr','nz');
+	if($resArr1 && is_array($resArr1)){
+		# 数量是否足够
+		$num = count($articleData);
+		$newArr2 = $articleData;
 		if($num >= $needNum){
-			$newArr3 = array();
-			# 一共3组，分别进行各自的随机排序，再组合
-			//var_dump($resArr3);exit('807_2');
-			$resArr3 = array_chunk($resArr3,12);
-			foreach($resArr3 as $key=>$valueArr){
-				if($key > 2) break;
-				#shuffle($valueArr);
-				$resArr3_1 = $valueArr;
-				//var_dump($resArr3_1);exit('816_1');
-				$newArr3 += $resArr3_1;
-				//var_dump($newArr3);exit('816_1');
-			}
-			$newArr2 = array();
-			# 将文章的返回数据 转成以文章id为键的数组
-			foreach ($newArr3 as $k=>$v){
-				$newArr2[$v['article_id']] = $v;
-			}
-			#var_dump($newArr2);exit('802_1');
 			return array('article'=>$newArr2,'bbs'=>$bbsData);
 			//return get_from_rand($resArr3);
 		}else{
-			$newArr2 = array();
-			# 将文章的返回数据 转成以文章id为键的数组
-			foreach ($resArr3 as $k=>$v){
-				$newArr2[$v['article_id']] = $v;
-			}
 			//exit('821_1');
 			return array('article'=>$newArr2,'bbs'=>$bbsData);
 		}
@@ -830,7 +801,84 @@ on t.word=t2.word where 1 '.$wheres2.' GROUP BY t.bbsUrl ORDER BY uv desc limit 
 		return array();
 	}
 }
+/**
+ * 对多维数组中的某个字段进行排序
+ * @param unknown $multi_array
+ * @param unknown $sort_key
+ * @param string $sort
+ * @return boolean|unknown
+ */
+function multi_array_sort($multi_array,$sort_key,$sort=SORT_ASC){
+	if(is_array($multi_array)){
+		foreach ($multi_array as $row_array){
+			if(is_array($row_array)){
+				$key_array[] = $row_array[$sort_key];
+			}else{
+				return false;
+			}
+		}
+	}else{
+		return false;
+	}
+	array_multisort($key_array,$sort,$multi_array);
+	return $multi_array;
+}
+/**
+ * 根据文章id得出分词结果
+ * @param array(0=>5234245,1=>5434654,...)
+ * @return array(0=>'oled',1=>'苹果',..)
+ */
+function get_word_results($articleArr){
+	if(!$articleArr)return false;
+	global $db_guess;
+	$idStr = implode(',',$articleArr);
+	$sql = 'select word from tongji_article_title_words where article_id in('.$idStr.') limit 15';
+	$res1 = $db_guess->get_results($sql);
+	$tmpArr = array();
+	if($res1){
+		foreach($res1 as $k=>$v){
+			$tmpArr[] = $v['word'];
+		}
+	}
+	$res1 = $tmpArr;
+	
+	return $res1;
+}
 
+/**
+ * 根据document_id的数组 获取对应的多个class_id
+ * @param $paramArr  array('5431246','5586529',...)
+ * @return array('5431246'=>364,'5586529'=>90,...)
+ */
+function get_class_id_by_docid($paramArr){
+	$options = array(
+		'articleIdArr'=>array(),
+	);
+	if (is_array($paramArr)) {
+		$options = array_merge($options, $paramArr);
+	}
+	extract($options);
+	if(!$articleIdArr)return array();
+	global $db_guess;
+	$articleIdStr = implode(',',$articleIdArr);
+	$sqlArr = array();
+	foreach($articleIdArr as $k=>$v){
+		if(!$v) continue;
+		$sqlArr[] = '(SELECT document_id,class_id from document_index where document_id = '.$v.' limit 1)';
+	}
+	$sqlStr = implode(' UNION ',$sqlArr);
+	$res1 = $db_guess->get_results($sqlStr);
+	if($res1){
+		$res2 = $v2 = array();
+		foreach ($res1 as $k=>$v){
+			$v2['document_id'] = (int)$v['document_id'];
+			$v2['class_id'] = (int)$v['class_id'];
+			$res2[$v2['document_id']] = $v2['class_id'];
+		}
+	}
+	
+	return $res2;
+}
 
 /**
  * 使数组按照uv*cnt的值倒序排列的回调
@@ -1047,14 +1095,14 @@ function get_uv_data_from_mongo(){
 }
 /**
  * 往mongo中存一组数，用于计算平均值
- * 传入一个int或者float类型
+ * 传入一个int或者float类型 
  */
 function storage_tmp_data($data){
 	#缓存key
-	$cacheKey = 'Guess_you_like:tmp_data_average:guess3';
+	$cacheKey = 'Guess_you_like:tmp_data_average:guess1_1';
 	$mDataArr = ZOL_Api::run("Kv.MongoCenter.get" , array(
 			'module'         => 'cms',        #业务名
-			'tbl'            => 'zol_index',     #表名
+			'tbl'            => 'zol_index',  #表名
 			'key'            => $cacheKey,    #key
 	));
 	if(!$mDataArr || !is_array($mDataArr)){
@@ -1063,11 +1111,11 @@ function storage_tmp_data($data){
 	$mDataArr[] = $data;
 	#写入缓存
 	ZOL_Api::run("Kv.MongoCenter.set" , array(
-	'module'         => 'cms',            		#业务名
-	'tbl'            => 'zol_index',     		#表名
-	'key'            => $cacheKey,        		#key
-	'data'           => $mDataArr,  			#数据
-	'life'           => 3600,            		#生命期   1*1*3600
+		'module'         => 'cms',            		#业务名
+		'tbl'            => 'zol_index',     		#表名
+		'key'            => $cacheKey,        		#key
+		'data'           => $mDataArr,  			#数据
+		'life'           => 3600,            		#生命期   1*1*3600
 	));
 	return true;
 }
