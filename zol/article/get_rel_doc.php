@@ -17,13 +17,22 @@ include "../../include/public_connect.php";
 define('ZOL_API_ISFW', false);      //是否使用ZOL新框架，true为使用
 define('ZOL_API_UTF8', false);      //是否是以UTF8返回数据，此行可以省略
 require_once('/www/zdata/Api.php'); //引入入口文件
-$expire = 1800;
+
+/**
+ * @desc 标哥要按照文章ID发布时间调整相应max-age时间 一年之外一周 24小时内半小时  还是按照文章ID进行处理比较快 小于500W的加1周 add by 任新强 2015-12-30 11:49:23
+ */
+
+$doc_id = isset($_GET['doc_id']) && (int)$_GET['doc_id'] ? (int)$_GET['doc_id'] : 0;
+
+
+$expire = $doc_id < 5000000 ? 604800 : 1800; // 3600*0.5    半小时  604800 一周
+
 if(!isset($_GET['refresh'])){
-	ZOL_Api::run("Base.Page.setExpires" , array('second'=>$expire));  // 3600*0.5 半小时
+	ZOL_Api::run("Base.Page.setExpires" , array('second'=>$expire));  // 3600*0.5    半小时
 }
 #初始化参数
 $classId = isset($_GET['class_id']) && (int)$_GET['class_id'] ? (int)$_GET['class_id'] : 0;
-$doc_id = isset($_GET['doc_id']) && (int)$_GET['doc_id'] ? (int)$_GET['doc_id'] : 0;
+
 $userid  = addslashes(  trim( strip_tags($_COOKIE['zol_userid']) ) );
 $callback = isset($_GET['callback']) && $_GET['callback'] ? trim($_GET['callback']) : 'callback';
 # 是否获取文章的简介，pv等信息,（互动的个人中心需要用到。如果值为6，则获取）   
@@ -174,7 +183,7 @@ if($doc_id){
 		#var_dump($docArr1_2); exit('156_3');
 		//exit('158');
 	}
-
+	
 	if(is_array($docArr1_2)) $num = count($docArr1_2);
 
 	#var_dump($docArr1_2);exit('164_2');
@@ -728,7 +737,7 @@ function result_recombination($result){
  *  @params array 	$unDocArr 	查询数据，需要排除进行的文章id集合，一维数组。
  * 	@params boolean	$is_miss 	用于标记是否是真正需要推的数据，true表示错过，不是真正要推的
  */
-function get_data_by_hot_v3($num=100,$getNum=36,$unDocArr=array(),$is_miss=true){
+function get_data_by_hot_v3($num=200,$getNum=36,$unDocArr=array(),$is_miss=true){
 	global $db_doc_read,$doc_id,$dataNum;
 	# 对一部分排重
 	if($unDocArr){
@@ -737,27 +746,68 @@ function get_data_by_hot_v3($num=100,$getNum=36,$unDocArr=array(),$is_miss=true)
 	}else{
 		$whereStr = ' where 1 AND  docId<>'.$doc_id.'  ';
 	}
-	$sql = 'SELECT docId,uv from article_monitor_v2 '.$whereStr.' ORDER BY uv desc limit '.$num;
-	$result2 = $db_doc_read->get_results($sql);
+// 	$sql = 'SELECT docId,uv from article_monitor_v2 '.$whereStr.' ORDER BY uv desc limit '.$num;
+	$sql = 'SELECT docId,uv from article_monitor_v2  ORDER BY uv desc limit '.$num;
+// 	$result2 = $db_doc_read->get_results($sql);
+	
+	
+	/**
+	 * @desc START 杨叔说搞一个缓存 add by 任新强 2015-12-30 12:05:21
+	 */
+	$mongokey22 = 'zol:cms:get:data:hot:v3:mongo:by:ryb';
+	$mongoDate22 = ZOL_Api::run("Kv.MongoCenter.get" , array(
+	    'module'         => 'cms',           #业务名
+	    'key'            => $mongokey22,   #key
+	));
+	if(!$mongoDate22){
+	    $result2 = $db_doc_read->get_results($sql);
+	    ZOL_Api::run("Kv.MongoCenter.set" , array(
+	        'module'         => 'cms',           #业务名
+	        'key'            => $mongokey22,   	 #key
+	        'data'           => $result2,       #数据
+	        'life'           => 60*60*4,        #生命期
+	    ));
+	} else {
+	    $result2 = $mongoDate22;
+	}
+	
+	if($unDocArr){
+	    $i = 0;
+	    $results = array();
+	    foreach($result2 as $v){
+	        if($i>99) break;
+	        if(in_array($v['docId'],$unDocArr)){
+	            continue;
+	        }
+	        array_push($results,$v);
+	        $i++;
+	    }
+	}
+	
+	/**
+	 * @desc END
+	 */
+	
 	# 在100个单元中随机取出36个单元，并按uv排倒序
-	if($result2){
+	if($results || $result2){
+	    $results = $results ? $results : $result2;
 		# 将可能存在的字串类型转成int型
 		$result2_1 = array();
-		foreach($result2 as $key=>$value){
+		foreach($results as $key=>$value){
 			$value1 = array();
 			$value1['docId'] = (int)$value['docId'];
 			$value1['uv'] = (int)$value['uv'];
 			$result2_1[$key] = $value1;
 		}
-		$result2 = $result2_1;
-		$res1 = array_rand($result2,$getNum);
+		$results = $result2_1;
+		$res1 = array_rand($results,$getNum);
 		if(!is_array($res1)){
 			$res1 = array($res1);
 		}
 		if($res1){
 			$newArray1 = array();
 			foreach($res1 as $key=>$value){
-				$newArray1[] = $result2[$value];
+				$newArray1[] = $results[$value];
 			}
 			$newArray2 = array();
 			foreach($newArray1 as $key=>$value){
@@ -804,17 +854,42 @@ function get_arti_by_word($docIdArr,$num2=36){
 	if(!$docIdArr) return array();
 	$wordArr = get_word_results($docIdArr);
 	$wordStr = '"'.implode('","',$wordArr).'"';
-	$sqlWordStr = $wordArr ? ' AND t.word in('.$wordStr.') ' : ' ';
+	$sqlWordStr = $wordArr ? ' AND t.word in('.$wordStr.') ' : '';
 	# 查询的字段
 	$fields1 = ' t.article_id,t.title,t.uv,count(t.article_id) as cnt,t.bbsUrl,t.flag ';
 	# 将小结果集放前边（小结果集驱动大结果集）
 	$wheres1 = $sqlWordStr.' AND t.bbsUrl="" ';
+	if(!$sqlWordStr) return array();
 	$wheres2 = $sqlWordStr.' AND t.bbsUrl<>"" AND page_type_id<>4 ';
 	$order1 = $order2 = ' ORDER BY uv desc ';
 	$sql = '(SELECT '.$fields1.' from tongji_article_title_words t where 1 '.$wheres1.' GROUP BY t.article_id,t.flag '.$order1.' limit 120)
 			';
 	#echo $sql;exit();
-	$resArr1 = $db_doc_read->get_results($sql);
+	$resArr1 = $db_doc_read->get_results($sql);//201601062133 suhy
+	/**
+	 * @desc START 杨叔说搞一个缓存 add by 任新强 2015-12-29 20:37:21 
+	 */
+// 	if(!$sqlWordStr) {
+//     	$mongokey = 'zol:cms:keyword:relevance:get:docid:by:ry';
+//     	$mongoDate = ZOL_Api::run("Kv.MongoCenter.get" , array(
+//         	'module'         => 'cms',           #业务名
+//         	'key'            => $mongokey,   #key
+//         ));
+//     	if(!$mongoDate){
+//     	    $resArr1 = $db_doc_read->get_results($sql);
+//     	    ZOL_Api::run("Kv.MongoCenter.set" , array(
+//     	        'module'         => 'cms',           #业务名
+//     	        'key'            => $mongokey,   	 #key
+//     	        'data'           => $resArr1,       #数据
+//     	        'life'           => 60*60*2,        #生命期
+//     	    ));
+//     	} else {
+//     	    $resArr1 = $mongoDate;
+//     	}
+// 	}
+	/**
+	 * @desc END
+	 */
 	# 统计词频 + 分词权重
 	$tmpArr1 = $tmpArr2 = $bbsData = $articleData = array();
 	$resArr2 = $resArr1;
@@ -846,12 +921,8 @@ function get_arti_by_word($docIdArr,$num2=36){
 		$i = 1;
 		# 每种相似度一个数组，存储“相似度相同”的数据
 		foreach($tmpArr1 as $k=>$v){
-			if(array_key_exists($v['word_power_val'], $tmpArr2) && $i<12){
-				$tmpArr2[$v['word_power_val']][] = $v;
-			}else{
-				$tmpArr2[$v['word_power_val']][] = $v;
-				$i++;
-			}
+			$newKey = $v['word_power_val']*10000;
+			$tmpArr2[$newKey][] = $v;
 		}
 		$tmpArr1 = array();
 		# 相同相似度的数据按照uv倒序
@@ -866,6 +937,7 @@ function get_arti_by_word($docIdArr,$num2=36){
 		}
 		$articleData = $tmpArr2;
 	}
+
 	#var_dump($articleData);exit('#868-1#');
 	if($resArr1 && is_array($resArr1)){
 		# 数量是否足够
